@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">BLE40ComDemo</string>
+
+    <string name="not_support_ble">BlueTooth is not supported!</string>
+    <string name="no_permission">No BlueTooth Permission!</string>
+    <string name="not_supported_to_4_0">Not supported for bluetooth 4.0!</string>
+
+    <string name="communication">Com</string>
+
+    <string name="title_paired">Paired</string>
+    <string name="title_scanned">Scanned</string>
+</resources>
