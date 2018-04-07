@@ -6,7 +6,15 @@
     <string name="not_supported_to_4_0">Not supported for bluetooth 4.0!</string>
 
     <string name="communication">Com</string>
+    <string name="unpair">Unpair</string>
+    <string name="ble">Ble</string>
 
     <string name="title_paired">Paired</string>
     <string name="title_scanned">Scanned</string>
+    <string name="unsupported_pairing">Pairing not supported</string>
+
+    <string name="start_to_bound">Start Bounding</string>
+    <string name="bound_success">Bound Success</string>
+    <string name="unbound_success">UnBound Success</string>
+    <string name="unbound_fail">UnBound Fail</string>
 </resources>

@@ -13,4 +13,8 @@ class L {
     static void i(String msg) {
         Log.i(TAG, msg);
     }
+
+    static void e(Throwable e) {
+        Log.e(TAG, "", e);
+    }
 }

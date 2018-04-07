@@ -18,9 +18,23 @@
         tools:text="ITEM" />
 
     <Button
+        android:id="@+id/ble_item_unpair"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/unpair"
+        android:textSize="13sp" />
+
+    <Button
         android:id="@+id/ble_item_com"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="@string/communication"
+        android:textSize="13sp" />
+
+    <Button
+        android:id="@+id/ble_item_ble"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/ble"
         android:textSize="13sp" />
 </LinearLayout>

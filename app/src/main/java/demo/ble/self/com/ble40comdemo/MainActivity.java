@@ -21,15 +21,15 @@ import android.os.Message;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.ListView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.Set;
 
-public class MainActivity extends Activity implements Handler.Callback {
+public class MainActivity extends Activity implements Handler.Callback, BlePairedAdapter.UnboundCallback {
 
     private static final int REQ_CODE = 0x111;
 
@@ -37,9 +37,10 @@ public class MainActivity extends Activity implements Handler.Callback {
     private static final int MSG_DISCOVER_DEVICES = 0x2;
     private static final int MSG_SCAN_DEVICES = 0x3;
     private static final int MSG_DEVICE_LIST_UPDATE = 0x4;
+    private static final int MSG_STOP_DISCOVERY = 0x5;
 
-    private ListView mBleList;
-    private BleListAdapter mAdapter;
+    private ListView mScannedList;
+    private BleListAdapter mScannedAdapter;
     private BluetoothManager mBleManager;
     private BluetoothAdapter mBleAdapter;
     private ThreadHandler mTh;
@@ -59,7 +60,7 @@ public class MainActivity extends Activity implements Handler.Callback {
         if (REQ_CODE == requestCode && null != grantResults) {
             for (int grantResult : grantResults) {
                 if (PackageManager.PERMISSION_GRANTED != grantResult) {
-                    Toast.makeText(this, R.string.no_permission, Toast.LENGTH_SHORT).show();
+                    ToastUtils.show(R.string.no_permission);
                     finish();
                     return;
                 }
@@ -78,18 +79,20 @@ public class MainActivity extends Activity implements Handler.Callback {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        checkPermissionIfNeed();
+        // 开启设备服务
+        startService(new Intent(this, DeviceService.class));
 
+        checkPermissionIfNeed();
         mBleManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
         if (null == mBleManager) {
-            Toast.makeText(this, R.string.not_support_ble, Toast.LENGTH_SHORT).show();
+            ToastUtils.show(R.string.not_support_ble);
             finish();
             return;
         }
 
         mBleAdapter = mBleManager.getAdapter();
         if (null == mBleAdapter) {
-            Toast.makeText(this, R.string.not_support_ble, Toast.LENGTH_SHORT).show();
+            ToastUtils.show(R.string.not_support_ble);
             finish();
             return;
         }
@@ -103,18 +106,22 @@ public class MainActivity extends Activity implements Handler.Callback {
             }
         }
         mDeviceList = new ArrayList<>();
-        mAdapter = new BleListAdapter();
-        mBleList = findViewById(R.id.ble_list);
-        mBleList.setAdapter(mAdapter);
-
-        mPairedList = findViewById(R.id.ble_paired_list);
-        mPairedAdapter = new BlePairedAdapter(this);
-        mPairedList.setAdapter(mPairedAdapter);
+        mScannedAdapter = new BleListAdapter();
+        mScannedList = findViewById(R.id.ble_list);
+        mScannedList.setAdapter(mScannedAdapter);
+        mScannedList.setOnItemClickListener(mScannedAdapter);
 
         mTh = new ThreadHandler(this);
+        mPairedList = findViewById(R.id.ble_paired_list);
+        mPairedAdapter = new BlePairedAdapter(this, mTh);
+        mPairedAdapter.setUnboundCallback(this);
+        mPairedList.setAdapter(mPairedAdapter);
+
+        mTh.getSubHandler().sendEmptyMessage(MSG_SCAN_DEVICES);
         mTh.getSubHandler().sendEmptyMessage(MSG_DISCOVER_DEVICES);
         mTh.getUiHandler().sendEmptyMessageDelayed(MSG_LOAD_PAIRED, 100);
         mTh.getUiHandler().sendEmptyMessageDelayed(MSG_DEVICE_LIST_UPDATE, 1000);
+        mTh.getUiHandler().sendEmptyMessageDelayed(MSG_STOP_DISCOVERY, 5000);
     }
 
     @Override
@@ -123,6 +130,11 @@ public class MainActivity extends Activity implements Handler.Callback {
         if (null != mTh) {
             mTh.destroy();
         }
+
+        stopDiscovery();
+    }
+
+    private void stopDiscovery() {
         if (null != mBleAdapter) {
             if (mBleAdapter.isDiscovering()) {
                 mBleAdapter.cancelDiscovery();
@@ -135,12 +147,13 @@ public class MainActivity extends Activity implements Handler.Callback {
         }
         if (null != mReceiver) {
             unregisterReceiver(mReceiver);
+            mReceiver = null;
         }
     }
 
     private void checkPermissionIfNeed() {
-        if(!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
-            Toast.makeText(this, R.string.not_supported_to_4_0, Toast.LENGTH_SHORT).show();
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
+            ToastUtils.show(R.string.not_supported_to_4_0);
             finish();
             return;
         }
@@ -148,15 +161,43 @@ public class MainActivity extends Activity implements Handler.Callback {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
             return;
         }
+        ArrayList<String> permissions = new ArrayList<>();
         if (PackageManager.PERMISSION_GRANTED != checkSelfPermission(Manifest.permission.BLUETOOTH)) {
-            L.i("Request permission");
-            requestPermissions(new String[]{Manifest.permission.BLUETOOTH,
-                    Manifest.permission.BLUETOOTH_ADMIN}, REQ_CODE);
+            permissions.add(Manifest.permission.BLUETOOTH);
+        }
+        if (PackageManager.PERMISSION_GRANTED != checkSelfPermission(Manifest.permission.BLUETOOTH_ADMIN)) {
+            permissions.add(Manifest.permission.BLUETOOTH_ADMIN);
+        }
+        if (PackageManager.PERMISSION_GRANTED != checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)) {
+            permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        }
+        if (PackageManager.PERMISSION_GRANTED != checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        if (permissions.isEmpty()) {
+            return;
+        }
+        L.i("Request permission");
+        requestPermissions(permissions.toArray(new String[permissions.size()]),
+                REQ_CODE);
+    }
+
+    private void onBounded(BluetoothDevice device) {
+        mTh.getUiHandler().sendEmptyMessage(MSG_LOAD_PAIRED);
+        ArrayList<BluetoothDevice> devices = mDeviceList;
+        if (null != devices) {
+            for (BluetoothDevice d : devices) {
+                if (d.getAddress().equals(device.getAddress())) {
+                    devices.remove(d);
+                    mTh.getUiHandler().sendEmptyMessage(MSG_DEVICE_LIST_UPDATE);
+                    break;
+                }
+            }
         }
     }
 
     private void onFound(BluetoothDevice device) {
-        L.i("onFound=" + device.toString());
+        L.i("onFound=" + device.getName());
         synchronized (mDeviceList) {
             for (BluetoothDevice d : mDeviceList) {
                 if (d.getAddress().equals(device.getAddress())) {
@@ -169,11 +210,14 @@ public class MainActivity extends Activity implements Handler.Callback {
 
     private void scanDevices() {
         L.i("scanDevices");
+
+        // Android 5.0以上采用低功效耗蓝牙
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             ScanCallback scanCallback = new ScanCallback() {
                 @Override
                 @TargetApi(Build.VERSION_CODES.LOLLIPOP)
                 public void onScanResult(int callbackType, ScanResult result) {
+                    L.i("Call From Scanner");
                     onFound(result.getDevice());
                 }
 
@@ -189,6 +233,7 @@ public class MainActivity extends Activity implements Handler.Callback {
             LeScanCallback scanCallback = new LeScanCallback() {
                 @Override
                 public void onLeScan(BluetoothDevice device, int rssi, byte[] scanRecord) {
+                    L.i("Call From Scanner");
                     onFound(device);
                 }
             };
@@ -200,16 +245,47 @@ public class MainActivity extends Activity implements Handler.Callback {
 
     private void discoverDevice() {
         L.i("discoverDevice");
-        mBleAdapter.startDiscovery();
         mReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                if (BluetoothDevice.ACTION_FOUND.equals(intent.getAction())) {
-                    onFound((BluetoothDevice) intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE));
+                L.i(intent.toString());
+                String action = intent.getAction();
+                if (!TextUtils.isEmpty(action)) {
+                    switch (action) {
+                        case BluetoothDevice.ACTION_FOUND:
+                            onFound((BluetoothDevice) intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE));
+                            break;
+                        case BluetoothDevice.ACTION_BOND_STATE_CHANGED:
+                            if (BluetoothDevice.BOND_BONDED
+                                    == intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)) {
+                                ToastUtils.show(R.string.bound_success);
+                                onBounded((BluetoothDevice) intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE));
+                            }
+                            for (String s : intent.getExtras().keySet()) {
+                                L.i(s + ":" + intent.getExtras().get(s));
+                            }
+                            break;
+                        default:
+                            break;
+                    }
                 }
             }
         };
-        registerReceiver(mReceiver, new IntentFilter(BluetoothDevice.ACTION_FOUND));
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothDevice.ACTION_FOUND);
+        filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+        filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECT_REQUESTED);
+        filter.addAction(BluetoothDevice.ACTION_CLASS_CHANGED);
+        filter.addAction(BluetoothDevice.ACTION_NAME_CHANGED);
+        filter.addAction(BluetoothDevice.ACTION_UUID);
+        filter.addAction(BluetoothDevice.ACTION_UUID);
+
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            filter.addAction(BluetoothDevice.ACTION_PAIRING_REQUEST);
+        }
+        registerReceiver(mReceiver, filter);
+        mBleAdapter.startDiscovery();
     }
 
     private void print(Set<BluetoothDevice> list) {
@@ -218,7 +294,7 @@ public class MainActivity extends Activity implements Handler.Callback {
             return;
         }
         for (BluetoothDevice b : list) {
-            L.i("Print:" + mAdapter.resolveDevice(b));
+            L.i("Print:" + mScannedAdapter.resolveDevice(b));
         }
     }
 
@@ -229,8 +305,9 @@ public class MainActivity extends Activity implements Handler.Callback {
 //                L.i("GATT");
 //                print(mBleManager.getConnectedDevices(BluetoothProfile.GATT));
 //                L.i("GATT_SERVER");
-                print(mBleAdapter.getBondedDevices());
-                mPairedAdapter.update(new ArrayList<>(mBleAdapter.getBondedDevices()));
+                Set<BluetoothDevice> pairedDevices = mBleAdapter.getBondedDevices();
+                print(pairedDevices);
+                mPairedAdapter.update(new ArrayList<>(pairedDevices));
                 break;
             case MSG_DISCOVER_DEVICES:
                 discoverDevice();
@@ -243,12 +320,15 @@ public class MainActivity extends Activity implements Handler.Callback {
                 synchronized (mDeviceList) {
                     deviceList = new ArrayList<>(mDeviceList);
                 }
-                mAdapter.update(deviceList);
-                mAdapter.notifyDataSetChanged();
+                mScannedAdapter.update(deviceList);
+                mScannedAdapter.notifyDataSetChanged();
                 if (isFinishing()) {
                     break;
                 }
                 mTh.getUiHandler().sendEmptyMessageDelayed(MSG_DEVICE_LIST_UPDATE, 1000);
+                break;
+            case MSG_STOP_DISCOVERY:
+                stopDiscovery();
                 break;
             default:
                 break;
@@ -256,7 +336,14 @@ public class MainActivity extends Activity implements Handler.Callback {
         return true;
     }
 
-    private class BleListAdapter extends BaseAdapter {
+    @Override
+    public void unBound(boolean success) {
+        if (success) {
+            mTh.getUiHandler().sendEmptyMessageDelayed(MSG_LOAD_PAIRED, 200);
+        }
+    }
+
+    private class BleListAdapter extends BaseAdapter implements AdapterView.OnItemClickListener {
 
         private ArrayList<BluetoothDevice> mDeviceList = new ArrayList<>();
 
@@ -292,6 +379,18 @@ public class MainActivity extends Activity implements Handler.Callback {
         private String resolveDevice(BluetoothDevice device) {
             String name = device.getName();
             return TextUtils.isEmpty(name) ? device.getAddress() : name;
+        }
+
+        @Override
+        public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                BluetoothDevice device = (BluetoothDevice) getItem(position);
+                if (device.createBond()) {
+                    ToastUtils.show(R.string.start_to_bound);
+                }
+            } else {
+                ToastUtils.show(R.string.unsupported_pairing);
+            }
         }
     }
 }
